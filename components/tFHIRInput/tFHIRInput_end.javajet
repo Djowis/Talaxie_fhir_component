@@ -1,0 +1,39 @@
+<%@ jet
+imports="
+	org.talend.designer.codegen.config.CodeGeneratorArgument
+	org.talend.core.model.process.INode
+	org.talend.core.model.process.ElementParameterParser
+"
+%>
+<%
+	CodeGeneratorArgument codeGenArgument = (CodeGeneratorArgument) argument;
+	INode node = (INode) codeGenArgument.getArgument();
+	String cid = node.getUniqueName();
+	boolean dieOnError = "true".equals(ElementParameterParser.getValue(node, "__DIE_ON_ERROR__"));
+%>
+		} // end of Bundle entry loop
+
+	} // end of pagination loop
+
+	if (nb_line_<%=cid%> == 0) {
+		System.err.println("<%=cid%>: WARN: search returned 0 resource ("
+			+ nb_pages_<%=cid%> + " page(s) fetched). Check server data and search parameters.");
+	}
+
+} catch (Exception e_<%=cid%>) {
+	globalMap.put("<%=cid%>_ERROR_MESSAGE", e_<%=cid%>.getMessage());
+<%
+	if (dieOnError) {
+%>
+	throw new RuntimeException(e_<%=cid%>);
+<%
+	} else {
+%>
+	System.err.println("<%=cid%>: WARN: " + e_<%=cid%>.getMessage());
+<%
+	}
+%>
+}
+
+globalMap.put("<%=cid%>_NB_LINE", nb_line_<%=cid%>);
+globalMap.put("<%=cid%>_NB_PAGES", nb_pages_<%=cid%>);

@@ -1,0 +1,165 @@
+<COMPONENT>
+	<HEADER PLATEFORM="ALL" VERSION="1.5" STATUS="ALPHA"
+		COMPATIBILITY="ALL" AUTHOR="Joris Raffin" RELEASE_DATE="20260727A"
+		STARTABLE="true">
+		<SIGNATURE></SIGNATURE>
+	</HEADER>
+
+	<FAMILIES>
+		<FAMILY>Healthcare/FHIR</FAMILY>
+		<FAMILY>Internet</FAMILY>
+	</FAMILIES>
+
+	<DOCUMENTATION>
+		<URL>https://github.com/CHANGEME/talaxie-fhir-components</URL>
+	</DOCUMENTATION>
+
+	<CONNECTORS>
+		<CONNECTOR CTYPE="FLOW" MAX_INPUT="0" MAX_OUTPUT="1"/>
+		<CONNECTOR CTYPE="SUBJOB_OK" MAX_INPUT="1"/>
+		<CONNECTOR CTYPE="SUBJOB_ERROR" MAX_INPUT="1"/>
+		<CONNECTOR CTYPE="COMPONENT_OK"/>
+		<CONNECTOR CTYPE="COMPONENT_ERROR"/>
+		<CONNECTOR CTYPE="RUN_IF"/>
+	</CONNECTORS>
+
+	<PARAMETERS>
+		<PARAMETER NAME="SCHEMA" FIELD="SCHEMA_TYPE" NUM_ROW="1" REQUIRED="true">
+			<TABLE>
+				<COLUMN NAME="resourceId"   TYPE="id_String" NULLABLE="true"  CUSTOM="true" READONLY="true" COMMENT="FHIR resource logical id"/>
+				<COLUMN NAME="resourceType" TYPE="id_String" NULLABLE="false" CUSTOM="true" READONLY="true" COMMENT="FHIR resource type"/>
+				<COLUMN NAME="lastUpdated"  TYPE="id_String" NULLABLE="true"  CUSTOM="true" READONLY="true" COMMENT="meta.lastUpdated (ISO 8601 instant)"/>
+				<COLUMN NAME="resourceJson" TYPE="id_String" NULLABLE="false" CUSTOM="true" READONLY="true" COMMENT="Raw resource JSON"/>
+			</TABLE>
+		</PARAMETER>
+
+		<PARAMETER NAME="BASE_URL" FIELD="TEXT" REQUIRED="true" NUM_ROW="10">
+			<DEFAULT>"https://hapi.fhir.org/baseR4"</DEFAULT>
+		</PARAMETER>
+
+		<PARAMETER NAME="RESOURCE_TYPE" FIELD="TEXT" REQUIRED="true" NUM_ROW="15">
+			<DEFAULT>"Patient"</DEFAULT>
+		</PARAMETER>
+
+		<PARAMETER NAME="SEARCH_PARAMS" FIELD="TABLE" REQUIRED="false" NB_LINES="4" NUM_ROW="20">
+			<ITEMS>
+				<ITEM NAME="PARAM_NAME"  FIELD="TEXT"/>
+				<ITEM NAME="PARAM_VALUE" FIELD="TEXT"/>
+			</ITEMS>
+		</PARAMETER>
+
+		<PARAMETER NAME="HTTP_HEADERS" FIELD="TABLE" REQUIRED="false" NB_LINES="3" NUM_ROW="25">
+			<ITEMS>
+				<ITEM NAME="HEADER_NAME"  FIELD="TEXT"/>
+				<ITEM NAME="HEADER_VALUE" FIELD="TEXT"/>
+			</ITEMS>
+		</PARAMETER>
+
+		<PARAMETER NAME="COLUMN_MAPPINGS" FIELD="TABLE" REQUIRED="false" NB_LINES="4" NUM_ROW="27">
+			<ITEMS>
+				<ITEM NAME="COLUMN_NAME" FIELD="TEXT"/>
+				<ITEM NAME="FHIRPATH"    FIELD="TEXT"/>
+			</ITEMS>
+		</PARAMETER>
+
+		<PARAMETER NAME="AUTH_TYPE" FIELD="CLOSED_LIST" REQUIRED="true" NUM_ROW="30">
+			<ITEMS DEFAULT="NONE">
+				<ITEM NAME="NONE"   VALUE="NONE"/>
+				<ITEM NAME="BASIC"  VALUE="BASIC"/>
+				<ITEM NAME="BEARER" VALUE="BEARER"/>
+				<ITEM NAME="OAUTH2_CLIENT_CREDENTIALS" VALUE="OAUTH2_CC"/>
+			</ITEMS>
+		</PARAMETER>
+
+		<PARAMETER NAME="AUTH_USER" FIELD="TEXT" REQUIRED="true" NUM_ROW="31" SHOW_IF="AUTH_TYPE == 'BASIC'">
+			<DEFAULT>""</DEFAULT>
+		</PARAMETER>
+		<PARAMETER NAME="AUTH_PASS" FIELD="PASSWORD" REQUIRED="true" NUM_ROW="32" SHOW_IF="AUTH_TYPE == 'BASIC'">
+			<DEFAULT>""</DEFAULT>
+		</PARAMETER>
+		<PARAMETER NAME="AUTH_TOKEN" FIELD="PASSWORD" REQUIRED="true" NUM_ROW="33" SHOW_IF="AUTH_TYPE == 'BEARER'">
+			<DEFAULT>""</DEFAULT>
+		</PARAMETER>
+		<PARAMETER NAME="OAUTH_TOKEN_URL" FIELD="TEXT" REQUIRED="true" NUM_ROW="34" SHOW_IF="AUTH_TYPE == 'OAUTH2_CC'">
+			<DEFAULT>""</DEFAULT>
+		</PARAMETER>
+		<PARAMETER NAME="OAUTH_CLIENT_ID" FIELD="TEXT" REQUIRED="true" NUM_ROW="35" SHOW_IF="AUTH_TYPE == 'OAUTH2_CC'">
+			<DEFAULT>""</DEFAULT>
+		</PARAMETER>
+		<PARAMETER NAME="OAUTH_CLIENT_SECRET" FIELD="PASSWORD" REQUIRED="true" NUM_ROW="36" SHOW_IF="AUTH_TYPE == 'OAUTH2_CC'">
+			<DEFAULT>""</DEFAULT>
+		</PARAMETER>
+		<PARAMETER NAME="OAUTH_SCOPE" FIELD="TEXT" REQUIRED="false" NUM_ROW="37" SHOW_IF="AUTH_TYPE == 'OAUTH2_CC'">
+			<DEFAULT>""</DEFAULT>
+		</PARAMETER>
+
+		<PARAMETER NAME="FOLLOW_REDIRECTS" FIELD="CHECK" REQUIRED="true" NUM_ROW="40">
+			<DEFAULT>true</DEFAULT>
+		</PARAMETER>
+
+		<PARAMETER NAME="MAX_PAGES" FIELD="TEXT" REQUIRED="true" NUM_ROW="45">
+			<DEFAULT>50</DEFAULT>
+		</PARAMETER>
+
+		<PARAMETER NAME="TIMEOUT_MS" FIELD="TEXT" REQUIRED="true" NUM_ROW="50">
+			<DEFAULT>30000</DEFAULT>
+		</PARAMETER>
+
+		<PARAMETER NAME="DIE_ON_ERROR" FIELD="CHECK" REQUIRED="true" NUM_ROW="55">
+			<DEFAULT>true</DEFAULT>
+		</PARAMETER>
+	</PARAMETERS>
+
+	<CODEGENERATION>
+		<IMPORTS>
+			<IMPORT NAME="jackson-databind" MVN="mvn:com.fasterxml.jackson.core/jackson-databind/2.15.3"
+					MODULE="jackson-databind-2.15.3.jar" REQUIRED="true"/>
+			<IMPORT NAME="jackson-core" MVN="mvn:com.fasterxml.jackson.core/jackson-core/2.15.3"
+					MODULE="jackson-core-2.15.3.jar" REQUIRED="true"/>
+			<IMPORT NAME="jackson-annotations" MVN="mvn:com.fasterxml.jackson.core/jackson-annotations/2.15.3"
+					MODULE="jackson-annotations-2.15.3.jar" REQUIRED="true"/>
+			<IMPORT NAME="hapi-fhir-base" MVN="mvn:ca.uhn.hapi.fhir/hapi-fhir-base/6.10.5"
+					MODULE="hapi-fhir-base-6.10.5.jar" REQUIRED="true"/>
+			<IMPORT NAME="hapi-fhir-structures-r4" MVN="mvn:ca.uhn.hapi.fhir/hapi-fhir-structures-r4/6.10.5"
+					MODULE="hapi-fhir-structures-r4-6.10.5.jar" REQUIRED="true"/>
+			<IMPORT NAME="org.hl7.fhir.r4" MVN="mvn:ca.uhn.hapi.fhir/org.hl7.fhir.r4/6.1.2.2"
+					MODULE="org.hl7.fhir.r4-6.1.2.2.jar" REQUIRED="true"/>
+			<IMPORT NAME="org.hl7.fhir.utilities" MVN="mvn:ca.uhn.hapi.fhir/org.hl7.fhir.utilities/6.1.2.2"
+					MODULE="org.hl7.fhir.utilities-6.1.2.2.jar" REQUIRED="true"/>
+			<IMPORT NAME="hapi-fhir-caching-api" MVN="mvn:ca.uhn.hapi.fhir/hapi-fhir-caching-api/6.10.5"
+					MODULE="hapi-fhir-caching-api-6.10.5.jar" REQUIRED="true"/>
+			<IMPORT NAME="hapi-fhir-caching-caffeine" MVN="mvn:ca.uhn.hapi.fhir/hapi-fhir-caching-caffeine/6.10.5"
+					MODULE="hapi-fhir-caching-caffeine-6.10.5.jar" REQUIRED="true"/>
+			<IMPORT NAME="caffeine" MVN="mvn:com.github.ben-manes.caffeine/caffeine/3.1.1"
+					MODULE="caffeine-3.1.1.jar" REQUIRED="true"/>
+			<IMPORT NAME="commons-lang3" MVN="mvn:org.apache.commons/commons-lang3/3.12.0"
+					MODULE="commons-lang3-3.12.0.jar" REQUIRED="true"/>
+			<IMPORT NAME="commons-text" MVN="mvn:org.apache.commons/commons-text/1.10.0"
+					MODULE="commons-text-1.10.0.jar" REQUIRED="true"/>
+			<IMPORT NAME="commons-codec" MVN="mvn:commons-codec/commons-codec/1.15"
+					MODULE="commons-codec-1.15.jar" REQUIRED="true"/>
+			<IMPORT NAME="commons-io" MVN="mvn:commons-io/commons-io/2.11.0"
+					MODULE="commons-io-2.11.0.jar" REQUIRED="true"/>
+			<IMPORT NAME="guava" MVN="mvn:com.google.guava/guava/32.1.1-jre"
+					MODULE="guava-32.1.1-jre.jar" REQUIRED="true"/>
+			<IMPORT NAME="failureaccess" MVN="mvn:com.google.guava/failureaccess/1.0.1"
+					MODULE="failureaccess-1.0.1.jar" REQUIRED="true"/>
+			<IMPORT NAME="slf4j-api" MVN="mvn:org.slf4j/slf4j-api/2.0.3"
+					MODULE="slf4j-api-2.0.3.jar" REQUIRED="true"/>
+			<IMPORT NAME="jackson-datatype-jsr310" MVN="mvn:com.fasterxml.jackson.datatype/jackson-datatype-jsr310/2.15.3"
+					MODULE="jackson-datatype-jsr310-2.15.3.jar" REQUIRED="true"/>
+			<IMPORT NAME="icu4j" MVN="mvn:com.ibm.icu/icu4j/72.1"
+					MODULE="icu4j-72.1.jar" REQUIRED="true"/>
+			<IMPORT NAME="ucum" MVN="mvn:org.fhir/ucum/1.0.8"
+					MODULE="ucum-1.0.8.jar" REQUIRED="true"/>
+			<IMPORT NAME="commons-net" MVN="mvn:commons-net/commons-net/3.9.0"
+					MODULE="commons-net-3.9.0.jar" REQUIRED="true"/>
+		</IMPORTS>
+	</CODEGENERATION>
+
+	<RETURNS>
+		<RETURN AVAILABILITY="AFTER" NAME="NB_LINE"       TYPE="id_Integer"/>
+		<RETURN AVAILABILITY="AFTER" NAME="NB_PAGES"      TYPE="id_Integer"/>
+		<RETURN AVAILABILITY="AFTER" NAME="ERROR_MESSAGE" TYPE="id_String"/>
+	</RETURNS>
+</COMPONENT>

@@ -1,0 +1,330 @@
+<%@ jet
+imports="
+	org.talend.core.model.process.INode
+	org.talend.core.model.process.ElementParameterParser
+	org.talend.core.model.process.IConnection
+	org.talend.core.model.process.IConnectionCategory
+	org.talend.designer.codegen.config.CodeGeneratorArgument
+	java.util.List
+	java.util.Map
+"
+%>
+<%
+	CodeGeneratorArgument codeGenArgument = (CodeGeneratorArgument) argument;
+	INode node = (INode) codeGenArgument.getArgument();
+	String cid = node.getUniqueName();
+
+	String baseUrl      = ElementParameterParser.getValue(node, "__BASE_URL__");
+	String resourceType = ElementParameterParser.getValue(node, "__RESOURCE_TYPE__");
+	String timeoutMs    = ElementParameterParser.getValue(node, "__TIMEOUT_MS__");
+	String maxPages     = ElementParameterParser.getValue(node, "__MAX_PAGES__");
+	boolean followRedirects = "true".equals(ElementParameterParser.getValue(node, "__FOLLOW_REDIRECTS__"));
+
+	String authType      = ElementParameterParser.getValue(node, "__AUTH_TYPE__");
+	String authUser      = ElementParameterParser.getValue(node, "__AUTH_USER__");
+	String oauthTokenUrl = ElementParameterParser.getValue(node, "__OAUTH_TOKEN_URL__");
+	String oauthClientId = ElementParameterParser.getValue(node, "__OAUTH_CLIENT_ID__");
+	String oauthScope    = ElementParameterParser.getValue(node, "__OAUTH_SCOPE__");
+
+	List<Map<String, String>> searchParams =
+		(List<Map<String, String>>) ElementParameterParser.getObjectValue(node, "__SEARCH_PARAMS__");
+	List<Map<String, String>> httpHeaders =
+		(List<Map<String, String>>) ElementParameterParser.getObjectValue(node, "__HTTP_HEADERS__");
+	List<Map<String, String>> columnMappings =
+		(List<Map<String, String>>) ElementParameterParser.getObjectValue(node, "__COLUMN_MAPPINGS__");
+
+	// Column names are entered WITHOUT quotes (schema column identifiers).
+	// Each entry is embedded below both as a String literal (map key) and as
+	// a bare Java identifier (output field). We escape the former, and we
+	// validate up front that every mapped column exists in the output schema.
+	java.util.Set<String> schemaColumns = new java.util.HashSet<String>();
+	for (org.talend.core.model.metadata.IMetadataTable mt : node.getMetadataList()) {
+		if (mt.getListColumns() != null) {
+			for (org.talend.core.model.metadata.IMetadataColumn c : mt.getListColumns()) {
+				schemaColumns.add(c.getLabel());
+			}
+		}
+	}
+	if (columnMappings != null) {
+		for (Map<String, String> m : columnMappings) {
+			String mc = m.get("COLUMN_NAME");
+			if (mc != null && !"".equals(mc.trim()) && !schemaColumns.contains(mc.trim())) {
+				throw new RuntimeException("tFHIRInput [" + node.getUniqueName()
+					+ "]: mapped column '" + mc.trim()
+					+ "' does not exist in the output schema. Add it via Edit schema, or remove the mapping row.");
+			}
+		}
+	}
+%>
+int nb_line_<%=cid%> = 0;
+int nb_pages_<%=cid%> = 0;
+globalMap.remove("<%=cid%>_ERROR_MESSAGE");
+
+	/*
+	 * HAPI FHIR context: expensive to build, created once per subjob.
+	 * The JSON parser replaces hand-rolled Bundle navigation; the FHIRPath
+	 * engine is instantiated here so class loading fails fast if a
+	 * dependency is missing.
+	 */
+	ca.uhn.fhir.context.FhirContext fhirContext_<%=cid%> = ca.uhn.fhir.context.FhirContext.forR4();
+	ca.uhn.fhir.parser.IParser fhirParser_<%=cid%> = fhirContext_<%=cid%>.newJsonParser();
+	ca.uhn.fhir.fhirpath.IFhirPath fhirPath_<%=cid%> = fhirContext_<%=cid%>.newFhirPath();
+<%
+	if (columnMappings != null && !columnMappings.isEmpty()) {
+%>
+	/*
+	 * Pre-compile each FHIRPath expression once, before the pagination loop.
+	 * Invalid syntax is a DESIGN error and fails the job UNCONDITIONALLY,
+	 * regardless of "Die on error" (which governs runtime errors only).
+	 * A valid expression matching nothing yields a null column, not an error.
+	 */
+	java.util.Map<String, ca.uhn.fhir.fhirpath.IFhirPath.IParsedExpression> fhirPathExpr_<%=cid%> =
+		new java.util.LinkedHashMap<String, ca.uhn.fhir.fhirpath.IFhirPath.IParsedExpression>();
+<%
+		for (Map<String, String> m : columnMappings) {
+			String col = m.get("COLUMN_NAME").trim();
+			String colLit = "\"" + col.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+			String expr = m.get("FHIRPATH");
+%>
+	try {
+		fhirPathExpr_<%=cid%>.put(<%=colLit%>, fhirPath_<%=cid%>.parse(<%=expr%>));
+	} catch (Exception fpParseEx_<%=cid%>) {
+		throw new RuntimeException("<%=cid%>: invalid FHIRPath expression for column "
+			+ <%=colLit%> + ": " + fpParseEx_<%=cid%>.getMessage(), fpParseEx_<%=cid%>);
+	}
+<%
+		}
+	}
+%>
+
+// --- Runtime phase: network + response parsing, governed by "Die on error" ---
+try {
+
+	/*
+	 * Build initial search URL: {base}/{ResourceType}?p1=v1&p2=v2
+	 * Parameter VALUES are URL-encoded at runtime; parameter NAMES are kept
+	 * as-is (FHIR modifiers like "family:exact" must not be percent-encoded).
+	 */
+	StringBuilder urlBuilder_<%=cid%> = new StringBuilder();
+	urlBuilder_<%=cid%>.append((<%=baseUrl%>).trim());
+	if (urlBuilder_<%=cid%>.charAt(urlBuilder_<%=cid%>.length() - 1) != '/') {
+		urlBuilder_<%=cid%>.append('/');
+	}
+	urlBuilder_<%=cid%>.append((<%=resourceType%>).trim());
+<%
+	if (searchParams != null && !searchParams.isEmpty()) {
+		boolean firstParam = true;
+		for (Map<String, String> p : searchParams) {
+			String sep = firstParam ? "?" : "&";
+%>
+	urlBuilder_<%=cid%>.append("<%=sep%>")
+		.append(<%=p.get("PARAM_NAME")%>)
+		.append('=')
+		.append(java.net.URLEncoder.encode(<%=p.get("PARAM_VALUE")%>, java.nio.charset.StandardCharsets.UTF_8));
+<%
+			firstParam = false;
+		}
+	}
+%>
+	String searchUrl_<%=cid%> = urlBuilder_<%=cid%>.toString();
+	System.out.println("<%=cid%>: GET " + searchUrl_<%=cid%>);
+
+	java.net.http.HttpClient httpClient_<%=cid%> = java.net.http.HttpClient.newBuilder()
+		.connectTimeout(java.time.Duration.ofMillis(<%=timeoutMs%>))
+		.followRedirects(java.net.http.HttpClient.Redirect.<%= followRedirects ? "NORMAL" : "NEVER" %>)
+		.build();
+
+	com.fasterxml.jackson.databind.ObjectMapper mapper_<%=cid%> =
+		new com.fasterxml.jackson.databind.ObjectMapper();
+
+<%
+	if ("BASIC".equals(authType)) {
+%>
+	String authPass_<%=cid%> = routines.system.PasswordEncryptUtil.decryptPassword(
+		<%=ElementParameterParser.getEncryptedValue(node, "__AUTH_PASS__")%>);
+	String authHeader_<%=cid%> = "Basic " + java.util.Base64.getEncoder().encodeToString(
+		(<%=authUser%> + ":" + authPass_<%=cid%>).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+<%
+	} else if ("BEARER".equals(authType)) {
+%>
+	String authHeader_<%=cid%> = "Bearer " + routines.system.PasswordEncryptUtil.decryptPassword(
+		<%=ElementParameterParser.getEncryptedValue(node, "__AUTH_TOKEN__")%>);
+<%
+	} else if ("OAUTH2_CC".equals(authType)) {
+%>
+	/*
+	 * OAuth2 client credentials: fetch the access token once, before the
+	 * pagination loop. Credentials are sent in the request body
+	 * (client_secret_post); the token is never logged.
+	 */
+	String oauthSecret_<%=cid%> = routines.system.PasswordEncryptUtil.decryptPassword(
+		<%=ElementParameterParser.getEncryptedValue(node, "__OAUTH_CLIENT_SECRET__")%>);
+
+	StringBuilder tokenBody_<%=cid%> = new StringBuilder("grant_type=client_credentials");
+	tokenBody_<%=cid%>.append("&client_id=")
+		.append(java.net.URLEncoder.encode(<%=oauthClientId%>, java.nio.charset.StandardCharsets.UTF_8));
+	tokenBody_<%=cid%>.append("&client_secret=")
+		.append(java.net.URLEncoder.encode(oauthSecret_<%=cid%>, java.nio.charset.StandardCharsets.UTF_8));
+	if (!"".equals(<%=oauthScope%>)) {
+		tokenBody_<%=cid%>.append("&scope=")
+			.append(java.net.URLEncoder.encode(<%=oauthScope%>, java.nio.charset.StandardCharsets.UTF_8));
+	}
+
+	java.net.http.HttpRequest tokenRequest_<%=cid%> = java.net.http.HttpRequest.newBuilder()
+		.uri(java.net.URI.create(<%=oauthTokenUrl%>))
+		.timeout(java.time.Duration.ofMillis(<%=timeoutMs%>))
+		.header("Content-Type", "application/x-www-form-urlencoded")
+		.POST(java.net.http.HttpRequest.BodyPublishers.ofString(tokenBody_<%=cid%>.toString()))
+		.build();
+
+	java.net.http.HttpResponse<String> tokenResponse_<%=cid%> =
+		httpClient_<%=cid%>.send(tokenRequest_<%=cid%>, java.net.http.HttpResponse.BodyHandlers.ofString());
+
+	if (tokenResponse_<%=cid%>.statusCode() >= 300) {
+		/*
+		 * RFC 6749 5.2: error responses carry standardized 'error' and
+		 * 'error_description' fields. These are safe to log (never echo
+		 * credentials), unlike the raw body which is deliberately not logged.
+		 */
+		String oauthErrorDetail_<%=cid%> = "";
+		try {
+			com.fasterxml.jackson.databind.JsonNode errJson_<%=cid%> =
+				mapper_<%=cid%>.readTree(tokenResponse_<%=cid%>.body());
+			oauthErrorDetail_<%=cid%> = " - error: " + errJson_<%=cid%>.path("error").asText("unknown")
+				+ (errJson_<%=cid%>.hasNonNull("error_description")
+					? " (" + errJson_<%=cid%>.get("error_description").asText() + ")" : "");
+		} catch (Exception parseIgnored_<%=cid%>) {
+			// body was not JSON: keep the status-only message
+		}
+		throw new RuntimeException("<%=cid%>: OAuth2 token request failed with HTTP "
+			+ tokenResponse_<%=cid%>.statusCode() + " on " + <%=oauthTokenUrl%>
+			+ oauthErrorDetail_<%=cid%>);
+	}
+
+	com.fasterxml.jackson.databind.JsonNode tokenJson_<%=cid%> =
+		mapper_<%=cid%>.readTree(tokenResponse_<%=cid%>.body());
+	String accessToken_<%=cid%> = tokenJson_<%=cid%>.path("access_token").asText(null);
+	if (accessToken_<%=cid%> == null) {
+		throw new RuntimeException("<%=cid%>: OAuth2 token response contains no 'access_token' field");
+	}
+	String authHeader_<%=cid%> = "Bearer " + accessToken_<%=cid%>;
+<%
+	}
+%>
+	int maxPages_<%=cid%> = <%=maxPages%>;
+	String nextUrl_<%=cid%> = searchUrl_<%=cid%>;
+
+	/*
+	 * Pagination loop: follow Bundle link[rel=next] until exhausted
+	 * or maxPages is reached (safety guard against circular links
+	 * and unbounded searches).
+	 */
+	while (nextUrl_<%=cid%> != null) {
+
+		if (nb_pages_<%=cid%> >= maxPages_<%=cid%>) {
+			System.err.println("<%=cid%>: WARN: max pages limit reached ("
+				+ maxPages_<%=cid%> + "), pagination stopped. Result is truncated.");
+			break;
+		}
+
+		java.net.http.HttpRequest request_<%=cid%> = java.net.http.HttpRequest.newBuilder()
+			.uri(java.net.URI.create(nextUrl_<%=cid%>))
+			.timeout(java.time.Duration.ofMillis(<%=timeoutMs%>))
+			.header("Accept", "application/fhir+json")
+<%
+	if (httpHeaders != null) {
+		for (Map<String, String> h : httpHeaders) {
+%>
+			.header((<%=h.get("HEADER_NAME")%>).trim(), <%=h.get("HEADER_VALUE")%>)
+<%
+		}
+	}
+	if (!"NONE".equals(authType)) {
+%>
+			.header("Authorization", authHeader_<%=cid%>)
+<%
+	}
+%>
+			.GET()
+			.build();
+
+		java.net.http.HttpResponse<String> response_<%=cid%> =
+			httpClient_<%=cid%>.send(request_<%=cid%>, java.net.http.HttpResponse.BodyHandlers.ofString());
+
+		if (response_<%=cid%>.statusCode() >= 300) {
+			throw new RuntimeException("<%=cid%>: HTTP " + response_<%=cid%>.statusCode()
+				+ " on " + nextUrl_<%=cid%>);
+		}
+
+		org.hl7.fhir.instance.model.api.IBaseResource parsed_<%=cid%> =
+			fhirParser_<%=cid%>.parseResource(response_<%=cid%>.body());
+
+		if (!(parsed_<%=cid%> instanceof org.hl7.fhir.r4.model.Bundle)) {
+			throw new RuntimeException("<%=cid%>: expected a FHIR Bundle, got resourceType='"
+				+ parsed_<%=cid%>.fhirType() + "'");
+		}
+		org.hl7.fhir.r4.model.Bundle bundle_<%=cid%> = (org.hl7.fhir.r4.model.Bundle) parsed_<%=cid%>;
+		nb_pages_<%=cid%>++;
+
+		/*
+		 * Resolve the next page BEFORE streaming entries: once the entry
+		 * loop hands control to downstream components, this Bundle must
+		 * already have yielded everything we need from it.
+		 */
+		org.hl7.fhir.r4.model.Bundle.BundleLinkComponent nextLink_<%=cid%> =
+			bundle_<%=cid%>.getLink(org.hl7.fhir.r4.model.Bundle.LINK_NEXT);
+		nextUrl_<%=cid%> = (nextLink_<%=cid%> != null) ? nextLink_<%=cid%>.getUrl() : null;
+
+		for (org.hl7.fhir.r4.model.Bundle.BundleEntryComponent entry_<%=cid%> : bundle_<%=cid%>.getEntry()) {
+
+			org.hl7.fhir.r4.model.Resource resource_<%=cid%> = entry_<%=cid%>.getResource();
+			if (resource_<%=cid%> == null) {
+				continue;
+			}
+<%
+	List<? extends IConnection> conns = node.getOutgoingSortedConnections();
+	if (conns != null) {
+		for (IConnection conn : conns) {
+			if (conn.getLineStyle().hasConnectionCategory(IConnectionCategory.DATA)) {
+				String row = conn.getName();
+%>
+			<%=row%>.resourceId   = resource_<%=cid%>.getIdElement().getIdPart();
+			<%=row%>.resourceType = resource_<%=cid%>.fhirType();
+			<%=row%>.lastUpdated  = resource_<%=cid%>.getMeta().hasLastUpdated()
+				? resource_<%=cid%>.getMeta().getLastUpdatedElement().getValueAsString() : null;
+			<%=row%>.resourceJson = fhirParser_<%=cid%>.encodeResourceToString(resource_<%=cid%>);
+<%
+				if (columnMappings != null) {
+					for (Map<String, String> m : columnMappings) {
+						String col = m.get("COLUMN_NAME").trim();
+						String colLit = "\"" + col.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+%>
+			{
+				java.util.List<org.hl7.fhir.instance.model.api.IBase> fpRes_<%=cid%> =
+					fhirPath_<%=cid%>.evaluate(resource_<%=cid%>,
+						fhirPathExpr_<%=cid%>.get(<%=colLit%>),
+						org.hl7.fhir.instance.model.api.IBase.class);
+				if (fpRes_<%=cid%>.isEmpty()) {
+					<%=row%>.<%=col%> = null;
+				} else {
+					StringBuilder fpSb_<%=cid%> = new StringBuilder();
+					for (int fpI_<%=cid%> = 0; fpI_<%=cid%> < fpRes_<%=cid%>.size(); fpI_<%=cid%>++) {
+						if (fpI_<%=cid%> > 0) { fpSb_<%=cid%>.append(","); }
+						org.hl7.fhir.instance.model.api.IBase fpEl_<%=cid%> = fpRes_<%=cid%>.get(fpI_<%=cid%>);
+						if (fpEl_<%=cid%> instanceof org.hl7.fhir.r4.model.PrimitiveType) {
+							fpSb_<%=cid%>.append(((org.hl7.fhir.r4.model.PrimitiveType) fpEl_<%=cid%>).getValueAsString());
+						} else {
+							fpSb_<%=cid%>.append(fhirParser_<%=cid%>.encodeToString(fpEl_<%=cid%>));
+						}
+					}
+					<%=row%>.<%=col%> = fpSb_<%=cid%>.toString();
+				}
+			}
+<%
+					}
+				}
+			}
+		}
+	}
+%>
+			nb_line_<%=cid%>++;

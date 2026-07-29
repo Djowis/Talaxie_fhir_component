@@ -1,0 +1,9 @@
+# OS / IDE noise
+.DS_Store
+Thumbs.db
+.project
+.classpath
+.settings/
+
+# Build artifacts
+*.zip
