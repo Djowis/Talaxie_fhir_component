@@ -1,6 +1,6 @@
 # talaxie-fhir-components
 
-Custom [Talaxie](https://www.talaxie.io/) (Talend Open Studio fork) components for [FHIR](https://hl7.org/fhir/) integration.
+Custom [Talaxie](https://www.talaxie.org/) (Talend Open Studio fork) components for [FHIR](https://hl7.org/fhir/) integration.
 
 | Component | Purpose | Status |
 |---|---|---|
